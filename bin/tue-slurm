@@ -10,20 +10,22 @@ from time import sleep
 
 class SlurmJob:
     def __init__(
-        self,
-        name,
-        time,
-        gpu,
-        num_gpus,
-        memory,
-        email,
-        on_local,
-        run_script,
-        slurm_img,
-        unk_args,
-        index=0,
+            self,
+            name,
+            time,
+            gpu,
+            num_gpus,
+            num_cpus,
+            memory,
+            email,
+            on_local,
+            run_script,
+            singularity_img,
+            clone_src_to_work,
+            unk_args,
+            index=0,
     ):
-        host_name = os.environ.get("HOSTNAME")
+        host_name = os.environ.get("HOSTNAME", "")
         self.on_tue_cluster = "bg-slurmb" in host_name
 
         self.name = f"{name}-{index}"
@@ -39,25 +41,37 @@ class SlurmJob:
             else:
                 self.gpu = "gpu-v100"
         else:
-            self.gpu = gpu  # "gtx1080", "v100", "gtx1080"
+            self.gpu = gpu  # "gtx1080", "v100", "gtx2080" "rtx5000"
             self.partition = "gpu"
             self.scratch = "scratch2" if gpu in ("gtx1080", "gtx980") else "scratch"
         self.num_gpus = num_gpus
+        self.num_cpus = num_cpus
         self.memory = memory
         self.on_slurm = not on_local
         self.run_script = run_script
         self.run_args = " ".join(unk_args)
-        self.slurm_img = slurm_img
+        self.singularity_img = singularity_img
+        self.clone_src_to_work = clone_src_to_work
+
+        if self.on_tue_cluster:
+            self.src_dir = "$HOME/projects"
+            self.work_dir = "$SCRATCH/work"
+        elif self.on_slurm:
+            self.src_dir = "$HOME/src"
+            self.work_dir = "$SCRATCH/scratch/users/$USER/$SLURM_JOB_ID"
+        else:
+            self.src_dir = "$HOME/projects"
+            self.work_dir = "$HOME/projects/work"
+
 
     @property
     def resource_config_string(self):
-
         if not Path("logs").exists():
             os.mkdir("logs")
         config_string = f"""
 #SBATCH --job-name={self.name}                   # Name of the job
 #SBATCH --ntasks=1                          # Number of tasks
-#SBATCH --cpus-per-task=2                   # Number of CPU cores per task
+#SBATCH --cpus-per-task={self.num_cpus}                   # Number of CPU cores per task
 #SBATCH --nodes=1                           # Ensure that all cores are on one machine
 #SBATCH --time={self.time}                       # Runtime in D-HH:MM
 #SBATCH --mem-per-cpu={self.memory}              # Memory pool for all cores (see also --mem-per-cpu)
@@ -81,36 +95,68 @@ class SlurmJob:
 
     @property
     def singularity_run_command(self):
-        if self.on_tue_cluster:
-            run_cmd = f"""
-            """
-        else:
-            run_cmd = f"""
-module purge
-module load singularity
-module load cuda
-
-# export SCRATCH=/scratch/users/$USER
-
-#Setting up the temporary scratch directory:
-export SCRATCH=/scratch/users/$USER/$SLURM_JOB_ID
-mkdir -p $SCRATCH
-            """
-
-        run_cmd += f"""
-scontrol show job $SLURM_JOB_ID  # print some info
-
-singularity exec \
---nv \
---env-file .env \
---no-home  \
---bind $SCRATCH:$SCRATCH,$HOME/projects/:$HOME/projects/,$HOME/src/:$HOME/src/,$HOME/.local/:$HOME/.local/  \
-{self.slurm_img} \
-{self.run_script} {self.run_args}
-
-# Remove the temporary scratch dir
-rm -rf $SCRATCH
+        run_cmd = f"""
+            export SRCDIR={self.src_dir}
+            export WORKDIR={self.work_dir}
+            mkdir -p $WORKDIR
         """
+        if self.clone_src_to_work:
+            run_cmd += f"""
+            mkdir -p $WORKDIR/src
+            start_dir=$(pwd)
+            cd $SRCDIR
+            for d in */ ; do
+                cd $d
+                if [ -d .git ]; then
+                    git clone . $WORKDIR/src/$d
+                fi;
+                cd ..
+            done
+            export SRCDIR=$WORKDIR/src
+            cd $start_dir
+            """
+
+        if self.on_slurm:
+            if not self.on_tue_cluster:
+                run_cmd += f"""
+                module purge
+                module load singularity
+                module load cuda
+                """
+
+            run_cmd += f"""
+                mkdir -p $HOME/.local
+                mkdir -p $HOME/.cache
+                scontrol show job $SLURM_JOB_ID  # print some info
+
+                singularity exec \
+                --nv \
+                --env-file .env \
+                --no-home  \
+                --bind $SRCDIR:/src,$WORKDIR:/work,$HOME/.local/:$HOME/.local/,$HOME/.cache/:$HOME/.cache/  \
+                {self.singularity_img} \
+                {self.run_script} {self.run_args}
+
+                    """
+        else:
+            run_cmd += f"""
+                singularity instance start --env "CUDA_VISIBLE_DEVICES={self.gpu}" \
+                         --nv \
+                         --env-file .env \
+                         --no-home  \
+                         --bind $HOME/.vscode-server:$HOME/.vscode-server,$SRCDIR:/src,$WORKDIR:/work,$HOME/.local/:$HOME/.local/,$HOME/.cache/:$HOME/.cache/,/tmp/djcache:/cache,/var/sinz-shared:/var/sinz-shared \
+                         {self.singularity_img} {self.name} \
+                         {self.run_script} {self.run_args}
+            """
+            # run_cmd += f"""
+            #     singularity exec --env "CUDA_VISIBLE_DEVICES={self.gpu}" \
+            #              --nv \
+            #              --env-file .env \
+            #              --no-home  \
+            #              --bind $SRCDIR:/src,$WORKDIR:/work,$HOME/.local/:$HOME/.local/,$HOME/.cache/:$HOME/.cache/,/tmp/djcache:/cache,/var/sinz-shared:/var/sinz-shared \
+            #              {self.singularity_img}  \
+            #              {self.run_script} {self.run_args}
+            # """
         return run_cmd
 
     def run(self):
@@ -138,10 +184,13 @@ rm -rf $SCRATCH
                 ).strip()
                 node = str(node).split("=")[1][:-1]
                 print(f"Successfully submitted job with ID {job_id} to node {node}.")
+                print(self.resource_config_string)
+                print(self.singularity_run_command)
             finally:
                 # remove the bash file
                 os.remove(slurm_job_bash_file)
         else:
+            print(self.singularity_run_command)
             print(subprocess.check_output(self.singularity_run_command, shell=True))
 
 
@@ -188,6 +237,14 @@ if __name__ == "__main__":
         help="",
     )
     parser.add_argument(
+        "--ncpus",
+        dest="num_cpus",
+        action="store",
+        default=2,
+        type=int,
+        help="",
+    )
+    parser.add_argument(
         "--ngpus",
         dest="num_gpus",
         action="store",
@@ -220,11 +277,19 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--img",
-        dest="slurm_img",
+        dest="singularity_img",
         action="store",
         default="shub://sinzlab/pytorch-singularity:v3.8-torch1.7.0-dj0.12.7",
         type=str,
         help="Singularity image to use",
+    )
+    parser.add_argument(
+        "--clone_src_to_work",
+        dest="clone_src_to_work",
+        action="store_true",
+        default=False,
+        help="Whether the source directory should be mounted directly to /src/ in the container "
+             "or clone it to the working directory and mount from there.",
     )
 
     args, unk_args = parser.parse_known_args()
@@ -235,11 +300,13 @@ if __name__ == "__main__":
             args.time,
             args.gpu,
             args.num_gpus,
+            args.num_cpus,
             args.memory,
             args.email,
             args.local,
             args.run_script,
-            args.slurm_img,
+            args.singularity_img,
+            args.clone_src_to_work,
             unk_args,
             index=job_index,
         )
