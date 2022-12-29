@@ -145,7 +145,7 @@ class SlurmJob:
                          --env-file .env \
                          --env "CUDA_VISIBLE_DEVICES={self.gpu}" \
                          --no-home  \
-                         --bind $HOME/.vscode-server:$HOME/.vscode-server,$SRCDIR:/src,$WORKDIR:/work,$HOME/.local/:$HOME/.local/,$HOME/.cache/:$HOME/.cache/,/tmp/djcache:/cache,/var/sinz-shared:/var/sinz-shared \
+                         --bind $HOME/.activeloop:$HOME/.activeloop,$HOME/.config:$HOME/.config,$HOME/.netrc:$HOME/.netrc,$HOME/.vscode-server:$HOME/.vscode-server,$SRCDIR:/src,$WORKDIR:/work,$HOME/.local/:$HOME/.local/,$HOME/.cache/:$HOME/.cache/,/tmp/djcache:/cache,/var/sinz-shared:/var/sinz-shared \
                          {self.singularity_img} {self.name} \
                          {self.run_script} {self.run_args}
             """
