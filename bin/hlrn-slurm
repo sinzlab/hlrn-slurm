@@ -57,10 +57,16 @@ class SlurmJob:
         self.cuda_version = cuda_version
         self.interactive = interactive
 
-        self.src_dir = "$HOME/src"
-        self.local_dir = "$LOCAL_TMPDIR/$USER"
-        self.scratch_emmy_dir = "/scratch-emmy/usr/$USER" if gpu == "A100" else "/scratch/usr/$USER"
-        self.scratch_dir = "/scratch/usr/$USER" 
+        if on_local:
+            self.src_dir = "$HOME/src"
+            self.local_dir = "$HOME/work/local"
+            self.scratch_emmy_dir = "$HOME/work/scratch_emmy" 
+            self.scratch_dir = "$HOME/work/scratch" 
+        else:
+            self.src_dir = "$HOME/src"
+            self.local_dir = "$LOCAL_TMPDIR/$USER"
+            self.scratch_emmy_dir = "/scratch-emmy/usr/$USER" if gpu == "A100" else "/scratch/usr/$USER"
+            self.scratch_dir = "/scratch/usr/$USER" 
         self.singularity_run_command = self.get_singularity_run_command()
 
     @property
@@ -121,12 +127,12 @@ class SlurmJob:
             self.run_args += " --experiment-file $HOME/config.yaml"
         singularity_mode = "instance start" if self.interactive else "exec"
         instance_name = self.name if self.interactive else ""
-
         bindings = {
             "$JOBDIR":"$HOME",
             self.scratch_dir+"/data":"/data",
             self.scratch_emmy_dir+"/pretrained_checkpoints":"/pretrained_checkpoints",
             "$HOME/.vscode-server":"$HOME/.vscode-server",
+            "$HOME/.ssh":"$HOME/.ssh",
             "$HOME/.local/share/wandb":"$HOME/.local/share/wandb",
             "$SRCDIR":"/src",
             self.local_dir:"/work",
