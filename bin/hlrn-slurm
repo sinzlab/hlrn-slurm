@@ -29,6 +29,7 @@ class SlurmJob:
         env_file,
         interactive,
         cuda_version,
+        exclude_nodes,
         config_file="",
         index=0,
     ):
@@ -56,6 +57,7 @@ class SlurmJob:
         # self.cuda_version = "11.7" if gpu == "A100" else "11.2"
         self.cuda_version = cuda_version
         self.interactive = interactive
+        self.exclude_nodes = exclude_nodes
 
         if on_local:
             self.src_dir = "$HOME/src"
@@ -86,6 +88,7 @@ class SlurmJob:
 #SBATCH --mail-user={self.email}                 # Email to which notifications will be sent
 #SBATCH -p {self.partition}                   # Partition to submit to
 #SBATCH -G {self.gpu}                         # Number of requested GPUs
+#SBATCH --exclude={self.exclude_nodes}         # Exclude nodes
             """
         return config_string
 
@@ -295,6 +298,14 @@ if __name__ == "__main__":
         help="Environment file",
     )
     parser.add_argument(
+        "--exclude",
+        dest="exclude_nodes",
+        action="store",
+        default="",
+        type=str,
+        help="List of nodes to exclude",
+    )
+    parser.add_argument(
         "--sweep",
         dest="sweep_file",
         action="store",
@@ -327,21 +338,22 @@ if __name__ == "__main__":
         config_files = generate_sweep(sweep_config, args.sweep_file)
         for i, config_file in enumerate(config_files):
             job = SlurmJob(
-                args.name,
-                args.time,
-                args.gpu,
-                args.num_gpus,
-                args.num_cpus,
-                args.memory,
-                args.email,
-                args.local,
-                args.run_script,
-                args.singularity_img,
-                args.clone_src,
-                unk_args,
-                args.env_file,
-                args.interactive,
-                args.cuda_version,
+                name=args.name,
+                time=args.time,
+                gpu=args.gpu,
+                num_gpus=args.num_gpus,
+                num_cpus=args.num_cpus,
+                memory=args.memory,
+                email=args.email,
+                on_local=args.local,
+                run_script=args.run_script,
+                singularity_img=args.singularity_img,
+                clone_src=args.clone_src,
+                unk_args=unk_args,
+                env_file=args.env_file,
+                interactive=args.interactive,
+                cuda_version=args.cuda_version,
+                exclude_nodes=args.exclude_nodes,
                 config_file=config_file,
                 index=i,
             )
@@ -349,21 +361,22 @@ if __name__ == "__main__":
     else:
         for job_index in range(args.num_jobs):
             job = SlurmJob(
-                args.name,
-                args.time,
-                args.gpu,
-                args.num_gpus,
-                args.num_cpus,
-                args.memory,
-                args.email,
-                args.local,
-                args.run_script,
-                args.singularity_img,
-                args.clone_src,
-                unk_args,
-                args.env_file,
-                args.interactive,
-                args.cuda_version,
+                name=args.name,
+                time=args.time,
+                gpu=args.gpu,
+                num_gpus=args.num_gpus,
+                num_cpus=args.num_cpus,
+                memory=args.memory,
+                email=args.email,
+                on_local=args.local,
+                run_script=args.run_script,
+                singularity_img=args.singularity_img,
+                clone_src=args.clone_src,
+                unk_args=unk_args,
+                env_file=args.env_file,
+                interactive=args.interactive,
+                cuda_version=args.cuda_version,
+                exclude_nodes=args.exclude_nodes,
                 index=job_index,
             )
             job.run()
