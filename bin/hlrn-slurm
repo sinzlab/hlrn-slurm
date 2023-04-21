@@ -66,7 +66,7 @@ class SlurmJob:
             self.scratch_dir = "$HOME/work/scratch" 
         else:
             self.src_dir = "$HOME/src"
-            self.local_dir = "$LOCAL_TMPDIR/$USER"
+            self.local_dir = "/local/$USER"
             self.scratch_emmy_dir = "/scratch-emmy/usr/$USER" if gpu == "A100" else "/scratch/usr/$USER"
             self.scratch_dir = "/scratch/usr/$USER" 
         self.singularity_run_command = self.get_singularity_run_command()
@@ -95,7 +95,7 @@ class SlurmJob:
     def get_singularity_run_command(self):
         run_cmd = f"""
             export SRCDIR={self.src_dir}
-            export JOBDIR={self.local_dir}/$SLURM_JOB_ID
+            export JOBDIR={self.local_dir}
             export JOBOUTDIR={self.scratch_emmy_dir}/outputs/$SLURM_JOB_ID
             mkdir -p $JOBDIR
             mkdir -p $JOBOUTDIR
@@ -134,7 +134,6 @@ class SlurmJob:
             "$JOBDIR":"$HOME",
             self.scratch_dir+"/data":"/data",
             self.scratch_emmy_dir+"/pretrained_checkpoints":"/pretrained_checkpoints",
-            "$HOME/.vscode-server":"$HOME/.vscode-server",
             "$HOME/.ssh":"$HOME/.ssh",
             "$HOME/.local/share/wandb":"$HOME/.local/share/wandb",
             "$SRCDIR":"/src",
