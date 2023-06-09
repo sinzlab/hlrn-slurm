@@ -43,8 +43,13 @@ class SlurmJob:
         days, hours, minutes = list(
             map(int, [time.split("-")[0]] + time.split("-")[1].split(":"))
         )
-        self.gpu = f"A100:{num_gpus}" if gpu == "A100" else num_gpus
-        self.partition = "gpu-testing" if gpu == "A100" else "gpu"
+        self.gpu = f"A100:{num_gpus}" if "A100" in gpu else num_gpus
+        if gpu == "A100:shared":
+            self.partition = "grete:shared"
+        elif gpu == "A100":
+            self.partition = "gpu-testing"
+        else:
+            self.partition = "gpu"
         self.num_cpus = num_cpus
         self.memory = memory
         self.on_slurm = not on_local
@@ -62,13 +67,16 @@ class SlurmJob:
         if on_local:
             self.src_dir = "$HOME/src"
             self.local_dir = "$HOME/work/local"
-            self.scratch_emmy_dir = "$HOME/work/scratch_emmy" 
-            self.scratch_dir = "$HOME/work/scratch" 
+            self.scratch_emmy_dir = "$HOME/work/scratch_emmy"
+            self.scratch_dir = "$HOME/work/scratch"
         else:
             self.src_dir = "$HOME/src"
             self.local_dir = "/local/$USER"
-            self.scratch_emmy_dir = "/scratch-emmy/usr/$USER" if gpu == "A100" else "/scratch/usr/$USER"
-            self.scratch_dir = "/scratch/usr/$USER" 
+            self.local_job_specific_dir = "/local/$USER/$SLURM_JOB_ID"
+            self.scratch_emmy_dir = (
+                "/scratch-emmy/usr/$USER" if "A100" in gpu else "/scratch/usr/$USER"
+            )
+            self.scratch_dir = "/scratch/usr/$USER"
         self.singularity_run_command = self.get_singularity_run_command()
 
     @property
@@ -89,6 +97,7 @@ class SlurmJob:
 #SBATCH -p {self.partition}                   # Partition to submit to
 #SBATCH -G {self.gpu}                         # Number of requested GPUs
 #SBATCH --exclude={self.exclude_nodes}         # Exclude nodes
+#SBATCH --qos=96h     # allow for longer runs
             """
         return config_string
 
@@ -98,22 +107,23 @@ class SlurmJob:
             export JOBDIR={self.local_dir}
             export JOBOUTDIR={self.scratch_emmy_dir}/outputs/$SLURM_JOB_ID
             mkdir -p $JOBDIR
+            mkdir -p {self.local_job_specific_dir}
             mkdir -p $JOBOUTDIR
         """
         if self.clone_src:
             run_cmd += f"""
-            mkdir -p $JOBDIR/src
+            mkdir -p $JOBDIR/$SLURM_JOB_ID/src
             start_dir=$(pwd)
             cd $SRCDIR
             module load git
             for d in */ ; do
                 cd $d
                 if [ -d .git ]; then
-                    git clone . $JOBDIR/src/$d
+                    git clone . $JOBDIR/$SLURM_JOB_ID/src/$d
                 fi;
                 cd ..
             done
-            export SRCDIR=$JOBDIR/src
+            export SRCDIR=$JOBDIR/$SLURM_JOB_ID/src
             cd $start_dir
             """
         if self.on_slurm:
@@ -125,24 +135,26 @@ class SlurmJob:
 
         if self.config_file:
             run_cmd += f"""
-                cp {self.config_file} $JOBDIR/config.yaml
+                cp {self.config_file} $JOBOUTDIR/config.yaml
             """
-            self.run_args += " --experiment-file $HOME/config.yaml"
+            self.run_args += " --experiment-file /output/config.yaml"
         singularity_mode = "instance start" if self.interactive else "exec"
         instance_name = self.name if self.interactive else ""
         bindings = {
-            "$JOBDIR":"$HOME",
-            self.scratch_dir+"/data":"/data",
-            self.scratch_emmy_dir+"/pretrained_checkpoints":"/pretrained_checkpoints",
-            "$HOME/.ssh":"$HOME/.ssh",
-            "$HOME/.local/share/wandb":"$HOME/.local/share/wandb",
-            "$SRCDIR":"/src",
-            self.local_dir:"/work",
-            "$JOBOUTDIR":"/output",
-            self.scratch_dir:"/scratch",
-            self.scratch_emmy_dir:"/scratch_emmy"
+            "$JOBDIR": "$HOME",
+            self.scratch_dir + "/data": "/data",
+            self.scratch_emmy_dir
+            + "/pretrained_checkpoints": "/pretrained_checkpoints",
+            "$HOME/.ssh": "$HOME/.ssh",
+            "$HOME/.local/share/wandb": "$HOME/.local/share/wandb",
+            "$SRCDIR": "/src",
+            self.local_dir: "/work",
+            self.local_job_specific_dir: "/work_non_shared/",
+            "$JOBOUTDIR": "/output",
+            self.scratch_dir: "/scratch",
+            self.scratch_emmy_dir: "/scratch_emmy",
         }
-        bindings = ",".join([f"{k}:{v}" for k,v in bindings.items()])
+        bindings = ",".join([f"{k}:{v}" for k, v in bindings.items()])
         run_cmd += f""" 
             singularity {singularity_mode} \
             --nv \
@@ -321,11 +333,7 @@ if __name__ == "__main__":
         "or clone it to the temporary directory associated with the job and mount it from there.",
     )
     parser.add_argument(
-        "--interactive",
-        dest="interactive",
-        action="store_true",
-        default=False,
-        help=""
+        "--interactive", dest="interactive", action="store_true", default=False, help=""
     )
     args, unk_args = parser.parse_known_args()
 
