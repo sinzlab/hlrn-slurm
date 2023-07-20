@@ -9,8 +9,8 @@ setup(
     version="0.0.0",
     description="Utility for deploying jobs on HLRN Cluster",
     author="Arne Nix",
-    author_email="info@sinzlab.com",
+    author_email="arnenix@gmail.com",
     packages=[],
-    scripts=['bin/hlrn-slurm'],
-    install_requires=[],
+    scripts=["bin/hlrn-slurm"],
+    install_requires=["jsonargparse"],
 )

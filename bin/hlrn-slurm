@@ -3,173 +3,98 @@
 from utils.sweep import generate_sweep
 
 import yaml
-import argparse
 import os
 import stat
 import subprocess
 from pathlib import Path
 from time import sleep
+from jsonargparse import ArgumentParser, ActionConfigFile
 
 
 class SlurmJob:
     def __init__(
         self,
-        name,
-        time,
-        gpu,
-        num_gpus,
-        num_cpus,
-        memory,
-        email,
-        on_local,
-        run_script,
-        singularity_img,
-        clone_src,
-        unk_args,
-        env_file,
-        interactive,
-        cuda_version,
-        exclude_nodes,
-        config_file="",
+        config,
         index=0,
+        config_file="",
     ):
-        host_name = os.environ.get("HOSTNAME", "")
-        self.on_tue_cluster = "bg-slurmb" in host_name
-
-        self.name = f"{name}-{index}"
-        self.email = email
-        self.time = time
-
-        days, hours, minutes = list(
-            map(int, [time.split("-")[0]] + time.split("-")[1].split(":"))
-        )
-        self.gpu = f"A100:{num_gpus}" if "A100" in gpu else num_gpus
-        if gpu == "A100:shared":
-            self.partition = "grete:shared"
-        elif gpu == "A100":
-            self.partition = "gpu-testing"
-        else:
-            self.partition = "gpu"
-        self.num_cpus = num_cpus
-        self.memory = memory
-        self.on_slurm = not on_local
-        self.run_script = run_script
-        self.run_args = " ".join(unk_args)
-        self.singularity_img = singularity_img
-        self.clone_src = clone_src
-        self.env_file = env_file
+        self.name = f"{config.name}-{index}"
+        self.account = config.account if config.account else os.environ.get("USER", "")
+        self.gpu = f"{config.gpu}:{config.ngpus}"
+        self.bindings = config.bindings
+        if config_file:
+            self.bindings["/local/$USER/$SLURM_JOB_ID/"] = "/config_folder"
         self.config_file = config_file
-        # self.cuda_version = "11.7" if gpu == "A100" else "11.2"
-        self.cuda_version = cuda_version
-        self.interactive = interactive
-        self.exclude_nodes = exclude_nodes
-
-        if on_local:
-            self.src_dir = "$HOME/src"
-            self.local_dir = "$HOME/work/local"
-            self.scratch_emmy_dir = "$HOME/work/scratch_emmy"
-            self.scratch_dir = "$HOME/work/scratch"
-        else:
-            self.src_dir = "$HOME/src"
-            self.local_dir = "/local/$USER"
-            self.local_job_specific_dir = "/local/$USER/$SLURM_JOB_ID"
-            self.scratch_emmy_dir = (
-                "/scratch-emmy/usr/$USER" if "A100" in gpu else "/scratch/usr/$USER"
-            )
-            self.scratch_dir = "/scratch/usr/$USER"
-        self.singularity_run_command = self.get_singularity_run_command()
+        self.config = config
 
     @property
     def resource_config_string(self):
         if not Path("logs").exists():
             os.mkdir("logs")
         config_string = f"""
+#SBATCH --account={self.account}
 #SBATCH --job-name={self.name}                   # Name of the job
 #SBATCH --ntasks=1                          # Number of tasks
-#SBATCH --cpus-per-task={self.num_cpus}                   # Number of CPU cores per task
+#SBATCH --cpus-per-task={self.config.ncpus}                   # Number of CPU cores per task
 #SBATCH --nodes=1                           # Ensure that all cores are on one machine
-#SBATCH --time={self.time}                       # Runtime in D-HH:MM
-#SBATCH --mem-per-cpu={self.memory}              # Memory pool for all cores (see also --mem-per-cpu)
+#SBATCH --time={self.config.time}                       # Runtime in D-HH:MM
+#SBATCH --mem-per-cpu={self.config.memory}              # Memory pool for all cores (see also --mem-per-cpu)
 #SBATCH --output=logs/{self.name}.%j.out              # File to which STDOUT will be written
 #SBATCH --error=logs/{self.name}.%j.err               # File to which STDERR will be written
 #SBATCH --mail-type=ALL                     # Type of email notification- BEGIN,END,FAIL,ALL
-#SBATCH --mail-user={self.email}                 # Email to which notifications will be sent
-#SBATCH -p {self.partition}                   # Partition to submit to
+#SBATCH --mail-user={self.config.email}                 # Email to which notifications will be sent
+#SBATCH -p {self.config.partition}                   # Partition to submit to
 #SBATCH -G {self.gpu}                         # Number of requested GPUs
-#SBATCH --exclude={self.exclude_nodes}         # Exclude nodes
-#SBATCH --qos=96h     # allow for longer runs
+#SBATCH --exclude={self.config.exclude}         # Exclude nodes
             """
+        if int(self.config.time.split("-")[0]) > 2:
+            config_string += """
+#SBATCH --qos=96h     # allow for longer runs
+                """
         return config_string
 
-    def get_singularity_run_command(self):
-        run_cmd = f"""
-            export SRCDIR={self.src_dir}
-            export JOBDIR={self.local_dir}
-            export JOBOUTDIR={self.scratch_emmy_dir}/outputs/$SLURM_JOB_ID
-            mkdir -p $JOBDIR
-            mkdir -p {self.local_job_specific_dir}
-            mkdir -p $JOBOUTDIR
-        """
-        if self.clone_src:
+    @property
+    def singularity_run_command(self):
+        run_cmd = ""
+        for outside_path in self.bindings.keys():
+            if not Path(outside_path).exists():
+                run_cmd += f"mkdir -p {outside_path}\n"
+        if not self.config.local:
             run_cmd += f"""
-            mkdir -p $JOBDIR/$SLURM_JOB_ID/src
-            start_dir=$(pwd)
-            cd $SRCDIR
-            module load git
-            for d in */ ; do
-                cd $d
-                if [ -d .git ]; then
-                    git clone . $JOBDIR/$SLURM_JOB_ID/src/$d
-                fi;
-                cd ..
-            done
-            export SRCDIR=$JOBDIR/$SLURM_JOB_ID/src
-            cd $start_dir
-            """
-        if self.on_slurm:
-            run_cmd += f"""
-            module load singularity
-            module load cuda/{self.cuda_version}
-            scontrol show job $SLURM_JOB_ID  # print some info
+                module load singularity
+                module load cuda/{self.config.cuda}
+                scontrol show job $SLURM_JOB_ID  # print some info
             """
 
         if self.config_file:
             run_cmd += f"""
-                cp {self.config_file} $JOBOUTDIR/config.yaml
+                cp {self.config_file} /local/$USER/$SLURM_JOB_ID/config.yaml
             """
-            self.run_args += " --experiment-file /output/config.yaml"
-        singularity_mode = "instance start" if self.interactive else "exec"
-        instance_name = self.name if self.interactive else ""
-        bindings = {
-            "$JOBDIR": "$HOME",
-            self.scratch_dir + "/data": "/data",
-            self.scratch_emmy_dir
-            + "/pretrained_checkpoints": "/pretrained_checkpoints",
-            "$HOME/.ssh": "$HOME/.ssh",
-            "$HOME/.local/share/wandb": "$HOME/.local/share/wandb",
-            "$SRCDIR": "/src",
-            self.local_dir: "/work",
-            self.local_job_specific_dir: "/work_non_shared/",
-            "$JOBOUTDIR": "/output",
-            self.scratch_dir: "/scratch",
-            self.scratch_emmy_dir: "/scratch_emmy",
-        }
-        bindings = ",".join([f"{k}:{v}" for k, v in bindings.items()])
+            run_args = (
+                self.config.run_args + " --experiment-file /config_folder/config.yaml"
+            )
+        else:
+            run_args = self.config.run_args
+        singularity_mode = "instance start" if self.config.interactive else "exec"
+        instance_name = self.name if self.config.interactive else ""
+        bindings = ",".join(
+            [f"{src}:{dest}" for src, dest in self.config.bindings.items()]
+        )
         run_cmd += f""" 
             singularity {singularity_mode} \
             --nv \
-            --env-file {self.env_file} \
+            --env-file {self.config.env} \
             --no-home  \
             --bind {bindings}  \
-            {self.singularity_img} {instance_name} \
-            {self.run_script} {self.run_args}
+            {self.config.img} {instance_name} \
+            {self.config.run} {run_args}
             """
-        if self.interactive:
+        if self.config.interactive:
             run_cmd += "sleep infinity"
         return run_cmd
 
     def run(self):
-        if self.on_slurm:
+        if not self.config.local:
             slurm_job_bash_file = f"./{self.name}.sh"
             slurm_job_bash_file_content = (
                 "#!/bin/bash \n \n"
@@ -186,7 +111,7 @@ class SlurmJob:
                 output = subprocess.check_output(
                     "sbatch " + slurm_job_bash_file, shell=True
                 )
-                sleep(5)
+                sleep(5)  # wait for the job to be submitted
                 job_id = int(output[20:].strip())
                 node = subprocess.check_output(
                     f"scontrol show job {job_id}| grep ' NodeList'", shell=True
@@ -204,27 +129,31 @@ class SlurmJob:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Running jobs on SLURM cluster")
+    parser = ArgumentParser(description="Running jobs on SLURM cluster")
+    parser.add_argument("--cfg", action=ActionConfigFile)
     parser.add_argument(
         "--run",
-        dest="run_script",
-        action="store",
+        dest="run",
         default="run.py",
         type=str,
         help="",
     )
     parser.add_argument(
         "--njobs",
-        dest="num_jobs",
-        action="store",
+        dest="njobs",
         default=1,
         type=int,
         help="",
     )
     parser.add_argument(
+        "--account",
+        dest="account",
+        default="",
+        type=str,
+    )
+    parser.add_argument(
         "--name",
         dest="name",
-        action="store",
         default="noname",
         type=str,
         help="",
@@ -232,7 +161,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--time",
         dest="time",
-        action="store",
         default="0-01:00",
         type=str,
         help="time to complete each job. Specify in the following format: D-HH:MM",
@@ -240,23 +168,27 @@ if __name__ == "__main__":
     parser.add_argument(
         "--gpu",
         dest="gpu",
-        action="store",
-        default="gpu-2080ti",
+        default="A100",
+        type=str,
+        help="",
+    )
+    parser.add_argument(
+        "--partition",
+        dest="partition",
+        default="grete:shared",
         type=str,
         help="",
     )
     parser.add_argument(
         "--ncpus",
-        dest="num_cpus",
-        action="store",
+        dest="ncpus",
         default=2,
         type=int,
         help="",
     )
     parser.add_argument(
         "--ngpus",
-        dest="num_gpus",
-        action="store",
+        dest="ngpus",
         default=1,
         type=int,
         help="",
@@ -264,7 +196,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--memory",
         dest="memory",
-        action="store",
         default="3G",
         type=str,
         help="",
@@ -272,7 +203,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--email",
         dest="email",
-        action="store",
         default=os.getenv("EMAIL"),
         type=str,
         help="",
@@ -286,104 +216,79 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--img",
-        dest="singularity_img",
-        action="store",
+        dest="img",
         default="shub://sinzlab/pytorch-singularity:v3.8-torch1.7.0-dj0.12.7",
         type=str,
         help="Singularity image to use",
     )
     parser.add_argument(
         "--cuda",
-        dest="cuda_version",
-        action="store",
+        dest="cuda",
         default="11.2",
         type=str,
         help="Cuda version to use",
     )
     parser.add_argument(
         "--env",
-        dest="env_file",
-        action="store",
+        dest="env",
         default=".env",
         type=str,
         help="Environment file",
     )
     parser.add_argument(
+        "--bindings",
+        dest="bindings",
+        default={},
+        type=dict,
+        help="List of bindings",
+    )
+    parser.add_argument(
         "--exclude",
-        dest="exclude_nodes",
-        action="store",
+        dest="exclude",
         default="",
         type=str,
         help="List of nodes to exclude",
     )
     parser.add_argument(
         "--sweep",
-        dest="sweep_file",
-        action="store",
+        dest="sweep",
         default="",
         type=str,
         help="Sweep file",
     )
     parser.add_argument(
-        "--clone_src",
-        dest="clone_src",
+        "--interactive",
+        dest="interactive",
         action="store_true",
         default=False,
-        help="Whether the source directory should be mounted directly to /src/ in the container "
-        "or clone it to the temporary directory associated with the job and mount it from there.",
+        help="Start a container that does not run a command, but is interactive (i.e. you can connect into it for development).",
     )
     parser.add_argument(
-        "--interactive", dest="interactive", action="store_true", default=False, help=""
+        "--run_args",
+        dest="run_args",
+        default="",
+        type=str,
+        help="Arguments to pass to the run command",
     )
-    args, unk_args = parser.parse_known_args()
+    config = parser.parse_args()
 
-    if args.sweep_file:
-        yaml_file = Path(f"{args.sweep_file}")
+    if config.sweep:
+        yaml_file = Path(f"{config.sweep}")
         if not yaml_file.exists():
             raise ValueError(f"Sweep file {yaml_file} does not exist")
         sweep_config = yaml.safe_load(yaml_file.read_text())
-        config_files = generate_sweep(sweep_config, args.sweep_file)
+        config_files = generate_sweep(sweep_config, config.sweep)
         for i, config_file in enumerate(config_files):
             job = SlurmJob(
-                name=args.name,
-                time=args.time,
-                gpu=args.gpu,
-                num_gpus=args.num_gpus,
-                num_cpus=args.num_cpus,
-                memory=args.memory,
-                email=args.email,
-                on_local=args.local,
-                run_script=args.run_script,
-                singularity_img=args.singularity_img,
-                clone_src=args.clone_src,
-                unk_args=unk_args,
-                env_file=args.env_file,
-                interactive=args.interactive,
-                cuda_version=args.cuda_version,
-                exclude_nodes=args.exclude_nodes,
-                config_file=config_file,
+                config,
                 index=i,
+                config_file=config_file,
             )
             job.run()
     else:
-        for job_index in range(args.num_jobs):
+        for job_index in range(config.njobs):
             job = SlurmJob(
-                name=args.name,
-                time=args.time,
-                gpu=args.gpu,
-                num_gpus=args.num_gpus,
-                num_cpus=args.num_cpus,
-                memory=args.memory,
-                email=args.email,
-                on_local=args.local,
-                run_script=args.run_script,
-                singularity_img=args.singularity_img,
-                clone_src=args.clone_src,
-                unk_args=unk_args,
-                env_file=args.env_file,
-                interactive=args.interactive,
-                cuda_version=args.cuda_version,
-                exclude_nodes=args.exclude_nodes,
+                config,
                 index=job_index,
             )
             job.run()

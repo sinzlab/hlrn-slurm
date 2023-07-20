@@ -1,0 +1,27 @@
+run: /src/xaug/run.sh 
+img: ~/xaug_image_torch2.sif 
+cuda: "11.7"
+gpu: A100 
+partition: "grete:shared"
+env: ~/src/xaug/.env 
+name: anix_dev 
+account: nix00011
+time: "0-09:30" 
+ngpus: 1 
+ncpus: 14 
+memory: 6G
+interactive: true
+bindings: {
+  "/local/$USER": "$HOME",
+  "$HOME/src": "/src",
+  "/scratch-grete/usr/$USER/data": "/data",
+  "/scratch-emmy/usr/$USER/pretrained_checkpoints": "/pretrained_checkpoints",
+  "$HOME/.ssh": "$HOME/.ssh",
+  "$HOME/.local/share/wandb": "$HOME/.local/share/wandb",
+  "/local/$USER": "/work",
+  "/local/$USER/$SLURM_JOB_ID": "/work_non_shared/",
+  "/scratch-emmy/usr/$USER/outputs/$SLURM_JOB_ID": "/output",
+  "/scratch-grete/usr/$USER/": "/scratch",
+  "/scratch-emmy/usr/$USER/": "/scratch_emmy",
+  "/scratch-grete/usr/$USER/": "/scratch_grete"
+}
