@@ -15,7 +15,7 @@
 ## Usage :rocket:
 First, you need to install the package via pip:
 ```bash
-    $ pip install hlrn-slurm
+    $ pip install hlrn_slurm
 ```
 
 
@@ -24,21 +24,21 @@ Then starting a job is very simple.
 Running an experiment can be as simple as:
 
 ```bash
-    $ hlrn-slurm --cfg ~/prod_config.yaml --run_args "--experiment <my_experiment>"
+    $ hlrn_slurm --cfg ~/prod_config.yaml --run_args "--experiment <my_experiment>"
 ```
 In this case, I have a set of slurm configurations that I want applied for every experiment and the only thing that changes for each run is the experiment specification that is passed to the runscript through `--run_args`.
 
 Starting a container for development (i.e. a container that allows an interactive from outside) is even simpler:
 
 ```bash
-    $ hlrn-slurm --cfg ~/dev_config.yaml
+    $ hlrn_slurm --cfg ~/dev_config.yaml
 ```
 Once the container is started, using it for development (e.g. through VS-Code) is easily possible, but requires some prior setup.
 A detailed guide on how to set this up is documented [here](https://www.hlrn.de/doc/display/PUB/VS+Code) (note that starting the container is already taken care of by `hlrn-slurm`).
 
 ## Config :wrench:
 Example configuration files can be found [here](./bin/example_configs/). 
-The available options and default values can be inspected via `$ hlrn-slurm --help`.
+The available options and default values can be inspected via `$ hlrn_slurm --help`.
 
 ## Sweep :chart_with_upwards_trend:
 The sweep option expects that you provide a sweep file. This is a `.yaml` file that contains the sweep options on top of your normal experiment configuration. 

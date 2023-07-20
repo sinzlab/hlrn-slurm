@@ -13,3 +13,5 @@ nnvision
 Untitled*.ipynb
 .history.*
 .vscode/*
+dist/
+*.egg-info/
